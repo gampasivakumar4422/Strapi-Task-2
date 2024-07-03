@@ -1,0 +1,43 @@
+name: Deploy Strapi
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Strapi
+        run: npm run build
+
+      - name: Deploy to EC2
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ubuntu
+        run: |
+          echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan $EC2_HOST >> ~/.ssh/known_hosts
+          rsync -avz --delete-after . $EC2_USER@$EC2_HOST:/home/ubuntu/my-project
+          ssh $EC2_USER@$EC2_HOST << 'EOF'
+            cd /home/ubuntu/my-project
+            npm install --production
+            pm2 restart all || pm2 start npm --name "strapi" -- run develop
+          EOF
+
