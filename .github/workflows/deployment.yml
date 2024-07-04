@@ -1,4 +1,4 @@
-name: Deploy
+name: Deploy Strapi to EC2
 
 on:
   push:
@@ -10,44 +10,61 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+    - name: Checkout code
+      uses: actions/checkout@v2
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+    - name: Set up SSH
+      uses: webfactory/ssh-agent@v0.5.3
+      with:
+        ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
 
-      - name: Install dependencies
-        run: npm install
+    - name: SSH and deploy
+      env:
+        EC2_HOST: ${{ secrets.EC2_HOST }}
+        EC2_USER: ${{ secrets.EC2_USER }}
+      run: |
+        ssh -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST << 'EOF'
+          sudo apt-get update
+          
+          # Install Node.js and npm
+          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+          sudo apt-get install -y nodejs
 
-      - name: Build the project
-        run: npm run build
+          # Install PM2
+          sudo npm install -g pm2
 
-      - name: Set up SSH and deploy
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ubuntu
-        run: |
-          # Start the ssh-agent in the background
-          eval "$(ssh-agent -s)"
-          # Add the SSH private key
-          echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
-          # Create the .ssh directory
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          # Add the EC2 host to the known hosts file
-          ssh-keyscan $EC2_HOST >> ~/.ssh/known_hosts
-          # Sync the project files to the EC2 instance
-          rsync -avz --delete-after . $EC2_USER@$EC2_HOST:/home/ubuntu/my-project
-          # Connect to the EC2 instance and set up the project
-          ssh $EC2_USER@$EC2_HOST << 'EOF'
-            cd /home/ubuntu/my-project
-            # Install PM2 globally
-            sudo npm install -g pm2
-            # Install project dependencies
-            npm install --production
-            # Restart or start the Strapi application with PM2
-            pm2 restart all || pm2 start npm --name "strapi" -- run develop
-          EOF
+          # Define project directory
+          PROJECT_DIR="/home/ubuntu/simple-strapi"
+
+          # Navigate to the project directory or clone if it does not exist
+          if [ ! -d "$PROJECT_DIR" ]; then
+             git clone https://github.com/Pramod858/simple-strapi.git $PROJECT_DIR
+          fi
+          cd $PROJECT_DIR
+
+          # Pull the latest changes from the repository
+          git pull origin main
+
+          # Install dependencies
+          npm install
+          
+          # Set permissions and run the environment script
+          chmod +x generate_env_var.sh
+          ./generate_env_var.sh
+
+          # Build the project
+          npm run build
+
+          # Restart Strapi using PM2
+          pm2 stop simple-strapi || true
+          pm2 start npm --name "simple-strapi" -- start
+
+          # Check if the service is running on port 1337
+          sleep 45
+          if lsof -i:1337 > /dev/null 2>&1; then
+              echo "Service is running on port 1337."
+          else
+              echo "No service running on port 1337."
+              exit 1
+          fi
+        EOF
